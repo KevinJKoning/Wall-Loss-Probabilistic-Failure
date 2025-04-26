@@ -1,0 +1,274 @@
+---
+title: "Wall Loss Based Probabilistic Physics of Failure"
+author: "Kevin Koning"
+format: html
+embed-resources: true
+editor: visual
+theme: cosmo
+fontsize: medium
+toc: true
+code-tools: true
+bibliography: references.bib
+---
+
+## Abstract
+
+To transition to probabilistic estimates of frequency of failure, distribution system operators have adopted well-established statistical methods. These encompass survival analysis techniques such as Weibull or Cox Proportional Hazards, and decision tree variants including XGBoost. A disadvantage of adopting these methods is their wide applicability also means they do not incorporate any physics specific to pipeline degradation, such as how wall loss leads to pipe failure. Another disadvantage is that integrity practitioners may find the validity of statistical coefficients harder to judge than physics-based parameters, such as a wall loss rate, leading to the deployment of unsound models.
+
+This paper demonstrates that by considering the uncertainty in wall loss rate, it can be the central parameter in estimating a probabilistic frequency of failure. Further, an analytic solution is available that avoids the need for *Monte Carlo* simulation. Finally, it can be shown that a physics-based combination of variables, such as time to failure based on the wall loss rate, properly reduces the dimensions of the statistical problem leading to better model fitness.
+
+## Introduction
+
+Important time-dependent threats to pipelines can be described by a rate of wall loss, including corrosion and cracking. The unit of measurement in the United States is usually abbreviated as MPY, short for thousandths of an inch per year. While the rate may not remain entirely constant over time, utilizing a rate for engineering calculations is both intuitive and practical. These rates can easily be compared to a pipeline's wall thickness, and with experience, a practitioner can quickly validate that a rate is reasonable given the conditions.
+
+All other things being equal, wall loss rate is more intuitive to engineers than statistical coefficients in a regression, survival, or other purely statistical model. This is rational, as wall loss rate is more closely coupled to the physics of the situation than the coefficients of purely statistical models.
+
+## Wall Loss Based Time Until Failure
+
+Current trends in integrity management continue towards Probabilistic Risk Assessment (PRA) models, which strive to handle risk from fundamental principles of probability of failure and consequence of failure. A simplistic wall loss rate does not initially seem to fit with this trend. A simplistic calculation for time to failure from wall loss is given in @eq-TimeToFailure . It is deterministic, yielding a single value and no indication of the true probability of failure over time.
+
+$$
+T = \frac{W_f}{\beta}
+$$ {#eq-TimeToFailure}
+
+Where $T$ is the *time until failure*, $W_f$ is wall thickness at failure, and $\beta$ [^1] is the wall loss rate.
+
+[^1]: We choose $\beta$ for our notation to maintain some consistency with other derivations presented later in the paper.
+
+First, consider that if we could know $\beta$ exactly, then @eq-TimeToFailure is valid and the probability of failure before the calculated time is 0 and 1 afterwards. This is not practically possible, however, and the wall loss rate will always have a degree of uncertainty.
+
+Second, consider that we can observe many estimates of wall loss rate in similar situations (strata) which would allow us to determine the shape of its uncertainty, i.e. a probability distribution of the wall loss rate. If we apply @eq-TimeToFailure with a wall loss rate represented not by a single value, but by this probability distribution, we will obtain a time to failure that is also a probability distribution.
+
+## Transformation of a Random Variable
+
+A straightforward solution for calculating the *time until failure* probability distribution is to repeat @eq-TimeToFailure many times, each with a randomly selected wall loss rate that was observed in the situation of interest. This method is called *Monte Carlo,* and is frequently the only practical option as the math of random variables as inputs to other equations, a so-called transformation of a random variable, will not necessarily produce a tidy analytic solution.
+
+First we present a simple *Monte Carlo* implementation of @eq-TimeToFailure . We generate a plausible distribution of values for a wall loss rate in MPY using a log-normal[^2] distribution where $\mu$ is 1.0 and $\sigma$ is 0.5, which is displayed in @fig-monte.
+
+[^2]: We choose log-normal due to its support in only positive real values, i.e. $X \in (0, \infty)$, and its plausibility in describing environmental processes. Other distributions may also be used.
+
+```{r}
+#| echo: false
+#| label: fig-monte
+#| fig-cap: "Plausible distribution of values for a wall loss rate in MPY"
+set.seed(123)
+x <- rlnorm(1000, meanlog = 1, sdlog = 0.5)
+hist(x, breaks = 30, xlab = "Wall Loss Rate (MPY)", main = NULL)
+```
+
+Next we'll calculate the time to failure in which we'll assume a wall thickness of 375 mils. The results are displayed in @fig-timeToFailure .
+
+```{r}
+#| echo: false
+#| label: fig-timeToFailure
+#| fig-cap: "Time until failure based on wall loss rate values"
+timeToFailure <- 375/x
+hist(timeToFailure, breaks = 30, xlab = "Time until Failure (Years)", main = NULL)
+
+```
+
+Please note that frequently a wall loss rate near 3 MPY may be observed, leading to a *time until failure* of approximately 125 years. Rarely a 10 MPY rate may be observed, leading to a *time until failure* of 37.5 years. Next we will view this situation in a slightly different way in @fig-cumulative, the cumulative probability of failure over time.
+
+```{r}
+#| echo: false
+#| label: fig-cumulative
+#| fig-cap: "Cumulative probability of failure based on time until failure"
+age <- seq(1, 600, 1)
+
+# Calculate the percentage of timeTilFailure that is less than x
+numericCumulativeProbFailure <- rep(0, length(age))
+for (i in 1:length(age)) {
+    numericCumulativeProbFailure[i] <- sum(timeToFailure < age[i]) / length(timeToFailure)
+}
+
+plot(age, numericCumulativeProbFailure, type = "l", xlab = "Age", ylab = "Cumulative Probability of Failure")
+
+```
+
+While the previous analysis is informative, *Monte Carlo* methods add notable overhead in both computation and book-keeping, and subsequently an analytic solution is more desirable. Fortunately, in this case the transformation of the random variable yields a tidy analytic solution. The analytic solution for the cumulative probability of failure is given in @eq-DGR:
+
+$$
+POF = 1 - F_{\beta}(x = \frac{W_f}{t})
+$$ {#eq-DGR}
+
+Where $F_{\beta}$ is the cumulative probability distribution of $\beta$. In this paper we've assumed our wall loss follows a log-normal distribution, for clarity in implementing @eq-DGR we can explicitly define a cumulative distribution in @eq-logCDF:
+
+$$
+F_{\beta}(x,\mu,\sigma) = \frac{1}{x\sigma\sqrt{2\pi}} e^{-\frac{1}{2}\left(\frac{\log(x) - \mu}{\sigma}\right)^2}
+$$ {#eq-logCDF}
+
+where $\mu$ is the mean of the log of the random variable and $\sigma$ is the standard deviation of the log of the random variable. Subsequently, the POF becomes:
+
+$$
+POF = 1 - F_{\beta}(x = \frac{W_f}{t}, \mu, \sigma) = 1-\frac{1}{\frac{W_f}{t}\sigma\sqrt{2\pi}} e^{-\frac{1}{2}\left(\frac{\log(\frac{W_f}{t}) - \mu}{\sigma}\right)^2}
+$$
+
+The analytic and the *Monte Carlo* solutions are presented together in @fig-converged .
+
+```{r}
+#| echo: false
+#| label: fig-converged
+#| fig-cap: "Convergence of the Monte Carlo and analytic solutions"
+cumulativeProbFailure <- 1 - plnorm(375/age, meanlog = 1, sdlog = 0.5)
+
+plot(age, 
+     cumulativeProbFailure,
+     col = "black",
+     type = "l", 
+     xlab = "Age", 
+     ylab = "Cumulative Probability of Failure")
+lines(age, 
+      numericCumulativeProbFailure, 
+      col = "red",
+      type = "l")
+legend("bottomright", 
+       legend = c("Monte Carlo", 
+                  "Analytic Solution"), 
+       col = c("red", "black"), 
+       lty = c(1, 1), 
+       lwd = c(1, 1))
+```
+
+@fig-converged indicates that the Monte Carlo and Analytic methods converge to the same result.
+
+## Estimating Probability of Failure
+
+A central question is what is the probability a pipe will fail in a future time period, such as the next year, or next 10 years. To estimate this probability we simply need to calculate the cumulative probability of failure at two points in time, and find the difference. As usual an example is the most illustrative. First we will calculate the probability the pipe fails before age 80:
+
+$$
+1 - CDF(x = \frac{0.375}{80}, \mu = 1, \sigma = 0.5) = 0.138
+$$
+
+Next we will calculate the probability the pipe fails before age 90:
+
+$$
+1 - CDF(x = \frac{0.375}{90},\mu = 1,\sigma = 0.5) = 0.196
+$$
+
+Subsequently the probability of failure from pipe age 80 to 90 is 0.196 - 0.138 = 0.058.
+
+```{r}
+#| echo: false
+#(1 - plnorm(375/90, meanlog = 1, sdlog = 0.5)) -
+#(1 - plnorm(375/80, meanlog = 1, sdlog = 0.5))
+#= 0.05858714
+
+```
+
+## Length Scale and Frequency of Failure
+
+A practical element that eventually needs to be considered is what length of pipe is relevant to the preceding analysis - is the likelihood of failure applicable to one foot or one mile of pipeline? The answer is dependent on how the estimate of wall loss rate is generated. For this analysis, the wall loss rate should be thought of as the largest rate occuring in a chosen length scale, e.g. 100 feet. The estimated failure probability is then applicable per 100 foot length, e.g. if a pipeline was composed of three 100 foot lengths, and each has a probability of failure in a 10 year period of 0.058, then the total expected frequency of failure for the 300 foot pipeline is 3\*0.058=0.174 over 10 years.
+
+Where in-line inspection data is available, the worst wall loss per chosen length scale can be determined from the data, and if the wall loss rate is less than the sensitivity of the tool, the rate for that segment is censored. For distribution systems, the wall loss rate is known when a through-wall leak occurs, for all other segments the rate is censored. Well-known methods for fitting probability distributions from censored data can then be used.
+
+## Physics based Dimension Reduction
+
+A strategy in statistical modeling when many predictor variables are present (many dimensions), is to reduce the number of variables/dimensions by combining variables, e.g. $X_1$ and $X_2$ into another variable $Z_1$. A concise example is using the predictor variables of debt and income to predict the likelihood of debt default. Considering debt and income independently will likely lead to confusing results. Utilizing the ratio of debt to income, e.g. $X_1/X_2 = Z_1$, as a single variable is more tractable.
+
+For pipelines, the wall loss rate and wall thickness can be considered analogous to debt and income from the debt default example. When large values of wall loss rate coincide with large values of thickness, the result is the same *time until failure* as small values of wall loss rate coinciding with small values of thickness. Proper dimension reduction can eliminate this confusion and improve the estimates of time until failure.
+
+The dimension reduction in the previously described wall loss based time to failure model occurs in the evaluation of the $x$ variable in @eq-DGR :
+
+$$ 
+x = \frac{W_f}{t} 
+$$
+
+Which eliminates the need to consider wall thickness when generating statistical estimates of the rate of wall loss.
+
+## Derivations and Prior Work
+
+### From the Author
+
+The probability of failure model (@eq-DGR) given in this paper can be derived based on the transformation of random variable $\beta$ in @eq-trans, in which $\beta$ is a rate of wall loss, $W_f$ is a constant wall thickness, and $T$ is the transformed variable, representing a time until failure.
+
+$$
+T = \frac{W_f}{\beta}
+$$ {#eq-trans}
+
+The cumulative distribution of $T$, $F_T(t)$, is derived in @eq-deriv.
+
+$$
+F_T(t) = P(T \leq t) = P\left(\frac{W_f}{\beta} \leq t\right) = P\left(\beta \gt \frac{W_f}{t}\right) = 1 - P(\beta \leq \frac{W_f}{t})
+$$ {#eq-deriv}
+
+$$
+ = 1 - F_\beta\left(\frac{W_f}{t}\right)
+$$ {#eq-derivF}
+
+Where $F_{\beta}$ is the cumulative distribution describing the $\beta$ parameter.
+
+### Meeker and Escobar Degradation Path
+
+Meeker and Escobar [@meeker1998] presented a model equivalent to the one described in this paper in their presentation of degradation paths. Meeker and Escobar present a general degradation path model where degradation is denoted by $\mathcal{D}(t)$ and failure occurs when $\mathcal{D}(t)=\mathcal{D_f}$. They present the special case where the degradation path is given by @eq-degpath:
+
+$$
+\mathcal{D}(t) = \beta_1 + \beta_2 t
+$$ {#eq-degpath}
+
+Where $\beta_1$ is assumed to be constant[^3] and $\beta_2$ random according to the log-normal distribution. The cumulative distribution for $\beta_2$ is given by @eq-degpath2.
+
+[^3]: $\beta_1$ is assumed to be zero in the Author's derivation
+
+$$
+Pr(\beta_2 \leq b) = \Phi_{nor} \left[ \frac{ \log(b) - \mu }{\sigma} \right]
+$$ {#eq-degpath2}
+
+$$
+= Pr(\beta_2 \gt b) = 1 -\Phi_{nor} \left[ \frac{ \log(b) - \mu }{\sigma} \right]
+$$ {#eq-degpathAuth}
+
+Where $\Phi_{nor}$ is the standard normal distribution with the addition of normal distribution parameters $\mu$ and $\sigma$. The parameter $\beta_1$ represents the common initial amount of degradation and $\beta_2$ represents a degradation rate that is random from unit to unit. (Equation @eq-degpathAuth has been added by the author for clarity). The time until failure is subsequently derived as follows:
+
+$$
+F(t;\beta_1,\mu,\sigma) = Pr[\mathcal{D}(t) \gt \mathcal{D}_f] = Pr(\beta_1 + \beta_2t \gt \mathcal{D}_f) = Pr \left(\beta_2 \gt \frac{\mathcal{D}_f-\beta_1}{t} \right)
+$$
+
+$$
+= 1 - \Phi_{nor} \left( \frac{ \log(\mathcal{D}_F - \beta_1) - \log(t) - \mu }{ \sigma } \right)
+$$
+
+$$
+ = \Phi_{nor} \left( \frac{\log(t) - [\log(\mathcal{D}_f - \beta_1) - \mu]}{\sigma} \right), \quad t > 0.
+$$ {#eq-degpath3}
+
+Equation @eq-degpath3 with $\beta_1=0$ is equivalent to @eq-derivF.
+
+### Gertsbakh and Kordonskiy Models of Failure
+
+Gertsbakh and Kordonskiy [@gertsbakh1969] present models of wear including the case where wear as a function of time is represented as: $$
+\eta(t) = \alpha t + \beta,
+$$ {#eq-GK1}
+
+Where $t$ is time, the quantity $\beta$ is the initial value of the wear, and the quantity $\alpha$ is the rate of wear. Obviously @eq-GK1 and @eq-degpath are notionally equivalent. Maximum wear is given by $M$, and subsequently the cumulative time until failure is given by @eq-GK2:
+
+$$
+P\{\tau > T\} = P\{\alpha T + \beta \leq M\}
+$$ {#eq-GK2}
+
+The Gertsbakh and Kordonskiy model differs from the other models presented in that it considers both $\alpha$ and $\beta$ to be random variables, and also that it uses a normal distribution to describe their variability. Time until failure is given as:
+
+$$
+P\{\tau \leq T\} = 1 - P\{\tau > T\}
+$$
+
+$$
+= \Phi_{nor} \left( \frac{T - c}{\sqrt{aT^2+b}} \right)
+$$ {#eq-GK4}
+
+Where $\Phi_{nor}$ is the standard normal distribution, $\tau$ = time to failure and $a$, $b$, and $c$ are defined as:
+
+$$
+a = \frac{Var(\alpha)}{E(\alpha)^2}
+$$ $$
+b = \frac{Var(\beta)}{E(\alpha)^2}
+$$ $$
+c = \frac{M - E(\beta)}{E(\alpha)}
+$$
+
+Gertsbakh and Kordonskiy refer to @eq-GK4 as a Bernstein's Distribution, which differs from a normal distribution due to its dependence on $T$.
+
+## Conclusion
+
+As demonstrated in this paper, probability of failure modeling with wall loss rate as a central parameter has notable advantages, and can be implemented using a straightforward analytic solution.
+
+## References

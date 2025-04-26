@@ -1,1 +1,0 @@
-# Wall-Loss-Probabilistic-Failure
